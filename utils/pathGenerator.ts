@@ -52,3 +52,40 @@ export class ProceduralRoadCurve extends THREE.Curve<THREE.Vector3> {
     return out.set(getRoadX(z), getRoadY(z), z);
   }
 }
+
+// Terrain height (independent of road, pure 2D noise)
+export function terrainH(wx: number, wz: number): number {
+  const s = (n: number) => Math.sin(n) * 0.5 + 0.5;
+  return (
+    s(wx * 0.019 + wz * 0.007) * 5 +
+    s(wx * 0.005 + wz * 0.013) * 8 +
+    s(wx * 0.002 + wz * 0.003) * 11 +
+    s(wx * 0.04  + wz * 0.02 ) * 2
+  ) - 8; // bias downward so road sits naturally
+}
+
+// Blends road height and terrain height based on lateral offset
+export function getSurfaceHeight(z: number, lateralX: number): number {
+  const rx = getRoadX(z);
+  const ry = getRoadY(z);
+
+  // Tangent and binormal to find world coordinates
+  const tangent = getRoadTangent(z);
+  const bx = tangent.z;
+  const bz = -tangent.x;
+
+  const wx = rx + bx * lateralX;
+  const wz = z + bz * lateralX;
+
+  const ROAD_HW = 5.6;
+  const CURB_W = 0.5;
+  const TERR_HW = 350;
+
+  const distFrac = Math.abs(lateralX) / TERR_HW;
+  const roadEdgeFrac = (ROAD_HW + CURB_W) / TERR_HW;
+  const blend = Math.max(0, (distFrac - roadEdgeFrac) / (1 - roadEdgeFrac));
+  const blendSm = blend * blend * (3 - 2 * blend); // smoothstep
+
+  const natural = terrainH(wx, wz);
+  return THREE.MathUtils.lerp(ry - 0.1, natural, blendSm);
+}

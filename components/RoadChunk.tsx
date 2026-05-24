@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import * as THREE from "three";
-import { getRoadX, getRoadY } from "../utils/pathGenerator";
+import { getRoadX, getRoadY, terrainH } from "../utils/pathGenerator";
 
 // ── Config ──────────────────────────────────────────────────────
 const ROAD_SEGS  = 120;
@@ -11,17 +11,6 @@ const CURB_W     = 0.5;
 const CURB_H     = 0.16;
 const TERR_HW    = 350;
 const TERR_COLS  = 18;
-
-// ── Terrain height (independent of road, pure 2D noise) ─────────
-function terrainH(wx: number, wz: number): number {
-  const s = (n: number) => Math.sin(n) * 0.5 + 0.5;
-  return (
-    s(wx * 0.019 + wz * 0.007) * 5 +
-    s(wx * 0.005 + wz * 0.013) * 8 +
-    s(wx * 0.002 + wz * 0.003) * 11 +
-    s(wx * 0.04  + wz * 0.02 ) * 2
-  ) - 8; // bias downward so road sits naturally
-}
 
 // ── Road geometry ────────────────────────────────────────────────
 function buildRoad(startZ: number, length: number) {
@@ -182,26 +171,49 @@ function makeDashes(startZ: number, length: number, count = 32) {
 }
 
 // ── Component ────────────────────────────────────────────────────
-type TOD = "dawn"|"day"|"dusk"|"night";
-const GRASS: Record<TOD,string> = { dawn:"#4e7e50", day:"#4e8c4a", dusk:"#4a6438", night:"#192618" };
-const ROAD:  Record<TOD,string> = { dawn:"#383838", day:"#2a2a2a", dusk:"#262626", night:"#161616" };
+type TOD = "dawn" | "day" | "dusk" | "night";
+type Theme = "hills" | "desert" | "snow";
+
+const GRASS_COLORS: Record<Theme, Record<TOD, string>> = {
+  hills:  { dawn: "#4e7e50", day: "#4e8c4a", dusk: "#4a6438", night: "#192618" },
+  desert: { dawn: "#b87040", day: "#d29060", dusk: "#a05030", night: "#2d1b10" },
+  snow:   { dawn: "#cbdbe6", day: "#e5eff5", dusk: "#b3c7d6", night: "#15202a" }
+};
+
+const ROAD_COLORS: Record<Theme, Record<TOD, string>> = {
+  hills:  { dawn: "#383838", day: "#2a2a2a", dusk: "#262626", night: "#161616" },
+  desert: { dawn: "#443c38", day: "#38322e", dusk: "#2d2825", night: "#1c1816" },
+  snow:   { dawn: "#2b343c", day: "#222a30", dusk: "#1c2227", night: "#0f1317" }
+};
 
 export function RoadChunk({
-  startZ, length, timeOfDay = "day",
-}: { startZ:number; length:number; timeOfDay?:TOD }) {
+  startZ,
+  length,
+  timeOfDay = "day",
+  theme = "hills",
+}: {
+  startZ: number;
+  length: number;
+  timeOfDay?: TOD;
+  theme?: Theme;
+}) {
   const roadGeo  = useMemo(() => buildRoad(startZ, length),      [startZ, length]);
   const curbL    = useMemo(() => buildCurb(startZ, length, -1),  [startZ, length]);
   const curbR    = useMemo(() => buildCurb(startZ, length,  1),  [startZ, length]);
   const terrGeo  = useMemo(() => buildTerrain(startZ, length),   [startZ, length]);
   const dashes   = useMemo(() => makeDashes(startZ, length, 34), [startZ, length]);
 
+  // Dash marks: yellow dividers in Desert and Snow, white in Hills
+  const dashColor = theme === "hills" ? "#e8e8e8" : "#f59e0b";
+  const dashEmissive = theme === "hills" ? "#ffffff" : "#f59e0b";
+
   return (
     <group>
       <mesh geometry={terrGeo} receiveShadow>
-        <meshStandardMaterial color={GRASS[timeOfDay]} roughness={0.92} flatShading={false} />
+        <meshStandardMaterial color={GRASS_COLORS[theme][timeOfDay]} roughness={0.92} flatShading={false} />
       </mesh>
       <mesh geometry={roadGeo} receiveShadow>
-        <meshStandardMaterial color={ROAD[timeOfDay]} roughness={0.88} metalness={0.03} />
+        <meshStandardMaterial color={ROAD_COLORS[theme][timeOfDay]} roughness={0.88} metalness={0.03} />
       </mesh>
       <mesh geometry={curbL} receiveShadow>
         <meshStandardMaterial color="#aaaaaa" roughness={0.75} />
@@ -212,7 +224,7 @@ export function RoadChunk({
       {dashes.map(([x,y,z], i) => (
         <mesh key={i} position={[x, y+0.05, z]}>
           <planeGeometry args={[0.15, 2.4]} />
-          <meshStandardMaterial color="#e8e8e8" roughness={0.7} emissive="#ffffff" emissiveIntensity={0.06} />
+          <meshStandardMaterial color={dashColor} roughness={0.7} emissive={dashEmissive} emissiveIntensity={0.08} />
         </mesh>
       ))}
     </group>
