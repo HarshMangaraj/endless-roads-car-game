@@ -1,11 +1,18 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Sky } from "@react-three/drei";
-import { getGlobalPointAtZ, getSurfaceHeight } from "../utils/pathGenerator";
-import { RoadChunk } from "./RoadChunk";
+import { Sky, Instances, Instance } from "@react-three/drei";
+import { getGlobalPointAtZ, getSurfaceHeight, getActiveBiome, config as pathConfig, getRoadX, getGlobalSurfaceHeight } from "../utils/pathGenerator";
+import { RoadChunk, Theme } from "./RoadChunk";
 import { Car } from "./Car";
+import { Ocean } from "./Ocean";
+import { Trees, getTrees } from "./Trees";
+import { Rocks } from "./Rocks";
+import { GrassClumps } from "./Grass";
+import { WeatherParticles, WeatherType } from "./Weather";
+import { Birds } from "./Birds";
+import { SunFlare } from "./SunFlare";
 import * as THREE from "three";
 import { audioEngine } from "../utils/audioEngine";
 
@@ -14,7 +21,6 @@ const CHUNK_LENGTH = 600;
 
 type TimeOfDay = "dawn" | "day" | "dusk" | "night";
 type CameraMode = "chase" | "hood" | "cinematic";
-type Theme = "hills" | "desert" | "snow";
 type CarType = "sedan" | "coupe" | "suv";
 
 const TIME_CONFIG = {
@@ -25,9 +31,9 @@ const TIME_CONFIG = {
 };
 
 const CAM_CONFIG: Record<CameraMode,{back:number;up:number;lookFwd:number;lerp:number}> = {
-  chase:     { back:9,   up:3.5, lookFwd:-18, lerp:0.10 },
-  hood:      { back:-1.8,up:1.6, lookFwd:-28, lerp:0.22 },
-  cinematic: { back:18,  up:7,   lookFwd:-14, lerp:0.06 },
+  chase:     { back:6,   up:3.0, lookFwd:-18, lerp:0.28 },
+  hood:      { back:-1.8,up:1.6, lookFwd:-28, lerp:0.35 },
+  cinematic: { back:14,  up:5,   lookFwd:-14, lerp:0.12 },
 };
 
 function getLightingConfig(time: TimeOfDay, theme: Theme) {
@@ -36,7 +42,7 @@ function getLightingConfig(time: TimeOfDay, theme: Theme) {
   let sun = base.sun;
   let ambient = base.ambient;
   
-  if (theme === "desert") {
+  if (theme === "desert" || theme === "sanddunes") {
     if (time === "day") { fog = "#d4b08c"; sun = "#ffead0"; }
     else if (time === "dusk") { fog = "#8a3c1b"; sun = "#ff5000"; }
     else if (time === "dawn") { fog = "#ba8763"; sun = "#ffa055"; }
@@ -46,112 +52,48 @@ function getLightingConfig(time: TimeOfDay, theme: Theme) {
     else if (time === "dusk") { fog = "#9397ab"; sun = "#df80a0"; }
     else if (time === "dawn") { fog = "#c9c2cf"; sun = "#ffd0bb"; }
     else if (time === "night") { fog = "#0a0f17"; sun = "#223150"; }
+  } else if (theme === "sea") {
+    if (time === "day") { fog = "#88b5d1"; sun = "#ffffff"; }
+    else if (time === "dusk") { fog = "#a07050"; sun = "#ff6040"; }
+    else if (time === "dawn") { fog = "#90b0c0"; sun = "#ffb080"; }
+    else if (time === "night") { fog = "#0b121c"; sun = "#203050"; }
+  } else if (theme === "forest") {
+    if (time === "day") { fog = "#98c8d0"; sun = "#fffde0"; }
+    else if (time === "dusk") { fog = "#805030"; sun = "#ff7733"; }
+    else if (time === "dawn") { fog = "#a0c0b0"; sun = "#ffbb66"; }
+    else if (time === "night") { fog = "#05080c"; sun = "#1a2540"; }
   }
   
   return { ...base, fog, sun, ambient };
 }
 
-// ─── Tree instancing ──────────────────────────────────────────
-const TREE_CACHE: Record<number, {x:number;y:number;z:number;s:number}[]> = {};
 
-function getTrees(chunkIdx: number) {
-  if (!TREE_CACHE[chunkIdx]) {
-    const rng = (n: number) => Math.abs(Math.sin(n * 127.1 + chunkIdx * 43.7) * 43758.5453) % 1;
+
+// ─── Cloud layer ──────────────────────────────────────────────
+function CloudLayer({ theme, timeOfDay }: { theme: Theme; timeOfDay: string }) {
+  const cloudColor = timeOfDay === "night" ? "#1a2030" : timeOfDay === "dusk" ? "#d08050" : timeOfDay === "dawn" ? "#e0a878" : "#ffffff";
+  const opacity = timeOfDay === "night" ? 0.15 : 0.45;
+  const clouds = useMemo(() => {
     const out = [];
-    for (let i = 0; i < 38; i++) {
-      const localZ = rng(i * 3) * CHUNK_LENGTH;
-      const z      = -(chunkIdx * CHUNK_LENGTH + localZ);
-      const side   = rng(i * 3 + 1) > 0.5 ? 1 : -1;
-      const dist   = 14 + rng(i * 3 + 2) * 72;
-      const pt     = getGlobalPointAtZ(z);
-      out.push({ x: pt.x + side * dist, y: pt.y, z, s: 0.7 + rng(i * 7) * 1.3 });
+    for (let i = 0; i < 20; i++) {
+      const x = (Math.sin(i * 73.7) * 0.5 + 0.5 - 0.5) * 600;
+      const z = (Math.sin(i * 47.3) * 0.5 + 0.5 - 0.5) * 800 - 400;
+      const y = 60 + (Math.sin(i * 31.1) * 0.5 + 0.5) * 40;
+      const sx = 15 + (Math.sin(i * 19.9) * 0.5 + 0.5) * 30;
+      const sz = 10 + (Math.sin(i * 23.1) * 0.5 + 0.5) * 20;
+      out.push({ x, y, z, sx, sz });
     }
-    TREE_CACHE[chunkIdx] = out;
-  }
-  return TREE_CACHE[chunkIdx];
-}
+    return out;
+  }, []);
 
-function Trees({ chunks, theme }: { chunks: number[]; theme: Theme }) {
   return (
     <>
-      {chunks.map(c =>
-        getTrees(c).map((t, i) => {
-          if (theme === "desert") {
-            // Cactus plant shape
-            return (
-              <group key={`${c}-${i}`} position={[t.x, t.y, t.z]} scale={t.s}>
-                {/* Main trunk */}
-                <mesh position={[0, 1.5, 0]} castShadow>
-                  <cylinderGeometry args={[0.26, 0.26, 3.0, 6]} />
-                  <meshStandardMaterial color="#2c5e3b" roughness={0.9} />
-                </mesh>
-                {/* Left arm */}
-                <mesh position={[-0.55, 1.7, 0]} castShadow>
-                  <boxGeometry args={[0.8, 0.24, 0.24]} />
-                  <meshStandardMaterial color="#2c5e3b" roughness={0.9} />
-                </mesh>
-                <mesh position={[-0.85, 2.1, 0]} castShadow>
-                  <boxGeometry args={[0.24, 0.8, 0.24]} />
-                  <meshStandardMaterial color="#2c5e3b" roughness={0.9} />
-                </mesh>
-                {/* Right arm */}
-                <mesh position={[0.55, 1.2, 0]} castShadow>
-                  <boxGeometry args={[0.8, 0.24, 0.24]} />
-                  <meshStandardMaterial color="#2c5e3b" roughness={0.9} />
-                </mesh>
-                <mesh position={[0.85, 1.6, 0]} castShadow>
-                  <boxGeometry args={[0.24, 0.8, 0.24]} />
-                  <meshStandardMaterial color="#2c5e3b" roughness={0.9} />
-                </mesh>
-              </group>
-            );
-          } else if (theme === "snow") {
-            // Pine tree covered in snow
-            return (
-              <group key={`${c}-${i}`} position={[t.x, t.y, t.z]} scale={t.s}>
-                <mesh position={[0, 1.0, 0]} castShadow>
-                  <cylinderGeometry args={[0.17, 0.24, 2.0, 5]} />
-                  <meshStandardMaterial color="#3a251b" roughness={0.95} />
-                </mesh>
-                <mesh position={[0, 3.0, 0]} castShadow>
-                  <coneGeometry args={[1.5, 2.6, 6]} />
-                  <meshStandardMaterial color="#d9e6ee" roughness={0.8} />
-                </mesh>
-                <mesh position={[0, 4.4, 0]} castShadow>
-                  <coneGeometry args={[1.1, 2.0, 6]} />
-                  <meshStandardMaterial color="#e8f2f8" roughness={0.8} />
-                </mesh>
-                <mesh position={[0, 5.6, 0]} castShadow>
-                  <coneGeometry args={[0.65, 1.5, 5]} />
-                  <meshStandardMaterial color="#ffffff" roughness={0.8} />
-                </mesh>
-              </group>
-            );
-          } else {
-            // Standard green pine tree
-            return (
-              <group key={`${c}-${i}`} position={[t.x, t.y, t.z]} scale={t.s}>
-                <mesh position={[0, 1.0, 0]} castShadow>
-                  <cylinderGeometry args={[0.17, 0.24, 2.0, 5]} />
-                  <meshStandardMaterial color="#5a3418" roughness={0.95} />
-                </mesh>
-                <mesh position={[0, 3.0, 0]} castShadow>
-                  <coneGeometry args={[1.5, 2.6, 6]} />
-                  <meshStandardMaterial color="#2a6030" roughness={0.88} />
-                </mesh>
-                <mesh position={[0, 4.4, 0]} castShadow>
-                  <coneGeometry args={[1.1, 2.0, 6]} />
-                  <meshStandardMaterial color="#348040" roughness={0.88} />
-                </mesh>
-                <mesh position={[0, 5.6, 0]} castShadow>
-                  <coneGeometry args={[0.65, 1.5, 5]} />
-                  <meshStandardMaterial color="#42904e" roughness={0.88} />
-                </mesh>
-              </group>
-            );
-          }
-        })
-      )}
+      {clouds.map((c, i) => (
+        <mesh key={i} position={[c.x, c.y, c.z]}>
+          <boxGeometry args={[c.sx, 2, c.sz]} />
+          <meshStandardMaterial color={cloudColor} transparent opacity={opacity} roughness={1} />
+        </mesh>
+      ))}
     </>
   );
 }
@@ -243,73 +185,6 @@ function WheelParticles({
   );
 }
 
-// ─── Weather snow particles ───────────────────────────────────
-function WeatherParticles({ theme, carRef }: { theme: Theme; carRef: React.RefObject<THREE.Group | null> }) {
-  const pointsRef = useRef<THREE.Points>(null);
-  const count = 350;
-
-  const [positions, velocities] = useRef([
-    new Float32Array(count * 3),
-    new Float32Array(count * 3)
-  ]).current;
-
-  useEffect(() => {
-    for (let i = 0; i < count; i++) {
-      positions[i * 3] = (Math.random() - 0.5) * 90;     // X width
-      positions[i * 3 + 1] = Math.random() * 45;          // Y height
-      positions[i * 3 + 2] = (Math.random() - 0.5) * 130;  // Z depth
-      
-      velocities[i * 3] = (Math.random() - 0.5) * 1.5;   // sway X
-      velocities[i * 3 + 1] = -4.0 - Math.random() * 2.5;  // falling Y
-      velocities[i * 3 + 2] = 0;
-    }
-  }, [positions, velocities]);
-
-  useFrame((_, dt) => {
-    if (!pointsRef.current || !carRef.current || theme !== "snow") return;
-    const carPos = carRef.current.position;
-    const geo = pointsRef.current.geometry;
-    const posAttr = geo.getAttribute("position") as THREE.BufferAttribute;
-
-    for (let i = 0; i < count; i++) {
-      let x = posAttr.getX(i);
-      let y = posAttr.getY(i);
-      let z = posAttr.getZ(i);
-
-      y += velocities[i * 3 + 1] * dt;
-      x += velocities[i * 3] * dt;
-
-      const relZ = z - carPos.z;
-      if (y < 0) {
-        y = 40 + Math.random() * 8;
-        x = carPos.x + (Math.random() - 0.5) * 90;
-        z = carPos.z - 90 + Math.random() * 130;
-      }
-      if (relZ > 40) {
-        z = carPos.z - 90 - Math.random() * 15;
-        x = carPos.x + (Math.random() - 0.5) * 90;
-        y = 20 + Math.random() * 20;
-      } else if (relZ < -110) {
-        z = carPos.z + (Math.random() - 0.5) * 30;
-      }
-
-      posAttr.setXYZ(i, x, y, z);
-    }
-    posAttr.needsUpdate = true;
-  });
-
-  if (theme !== "snow") return null;
-
-  return (
-    <points ref={pointsRef}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-      </bufferGeometry>
-      <pointsMaterial color="#ffffff" size={0.28} transparent opacity={0.75} sizeAttenuation />
-    </points>
-  );
-}
-
 // ─── Core Game Logic ──────────────────────────────────────────
 interface GLProps {
   speedRef:      React.RefObject<number>;
@@ -318,6 +193,7 @@ interface GLProps {
   timeOfDay:     TimeOfDay;
   cameraMode:    CameraMode;
   theme:         Theme;
+  weather:       WeatherType;
   carType:       CarType;
   carColor:      string;
   soundOn:       boolean;
@@ -332,6 +208,7 @@ function GameLogic({
   timeOfDay,
   cameraMode,
   theme,
+  weather,
   carType,
   carColor,
   soundOn,
@@ -340,8 +217,9 @@ function GameLogic({
 }: GLProps) {
   const chunksRef   = useRef<number[]>([0, 1, 2]);
   const [activeChunks, setActiveChunks] = useState<number[]>([0, 1, 2]);
-  const currentZ    = useRef(0);
-  const lateralX    = useRef(0);
+  const pos         = useRef(new THREE.Vector3(0, 0, 0));
+  const heading     = useRef(Math.PI); // Facing -Z
+  const isInit      = useRef(false);
   const distRef     = useRef(0);
   const lastChunkIdx= useRef(-1);
   const hudTimer    = useRef(0);
@@ -358,55 +236,51 @@ function GameLogic({
     const str = steerRef.current ?? 0;
     const dt = Math.min(delta, 0.05);
 
-    // ── Off-Road & Friction limits ──
-    const offroad = Math.abs(lateralX.current) > 6.1;
+    if (!isInit.current) {
+      pos.current.set(getRoadX(0), getGlobalSurfaceHeight(getRoadX(0), 0) + wheelRadius, 0);
+      isInit.current = true;
+    }
+
+    // ── True Kinematic Vehicle Physics ──
+    const roadX = getRoadX(pos.current.z);
+    const distToRoad = Math.abs(pos.current.x - roadX);
+    const offroad = distToRoad > 6.1;
     if (offroad !== isOffRoad) setIsOffRoad(offroad);
+    
     const maxSpeed = offroad ? 42 : 150;
     if (spd > maxSpeed) {
       spd = THREE.MathUtils.lerp(spd, maxSpeed, 0.08);
       speedRef.current = spd;
     }
 
-    // Advance longitudinal direction
-    currentZ.current  -= spd * dt;
-    distRef.current   += Math.abs(spd * dt);
+    // Steering turns the vehicle's heading (Yaw)
+    // Scale turning response by speed so you don't spin out standing still, but don't turn instantly at max speed.
+    const speedFactor = Math.abs(spd) > 5 ? 1 : Math.abs(spd) / 5;
+    const actualTurnRate = str * speedFactor * 1.5 * dt;
+    heading.current -= actualTurnRate;
 
-    // Lateral steering with wider bounds off-road
-    lateralX.current  += str * spd * 0.018 * dt;
-    lateralX.current   = THREE.MathUtils.clamp(lateralX.current, -70.0, 70.0);
-    // Drift back to center slightly
-    lateralX.current  *= 0.996;
+    // Apply velocity to global position
+    pos.current.x += Math.sin(heading.current) * spd * dt;
+    pos.current.z += Math.cos(heading.current) * spd * dt;
 
-    // Road alignment vectors
-    const roadPos    = getGlobalPointAtZ(currentZ.current);
-    const roadAhead  = getGlobalPointAtZ(currentZ.current + camCfg.lookFwd);
+    // Calculate ground height
+    const surfaceY = getGlobalSurfaceHeight(pos.current.x, pos.current.z);
+    pos.current.y = surfaceY + wheelRadius;
+    
+    distRef.current += Math.abs(spd * dt);
 
-    const tangent = new THREE.Vector3(
-      roadAhead.x - roadPos.x,
-      0,
-      roadAhead.z - roadPos.z
-    ).normalize();
-    const right = new THREE.Vector3(-tangent.z, 0, tangent.x);
-
-    // Compute surface heights (incorporating terrain noise)
-    const surfaceY = getSurfaceHeight(currentZ.current, lateralX.current);
-    const aheadSurfaceY = getSurfaceHeight(currentZ.current + camCfg.lookFwd, lateralX.current);
-
-    const carPos = new THREE.Vector3(
-      roadPos.x + right.x * lateralX.current,
-      surfaceY + wheelRadius,
-      roadPos.z + right.z * lateralX.current
+    // Look target for car orientation (pitch to match ground)
+    const lookAhead = new THREE.Vector3(
+      pos.current.x + Math.sin(heading.current) * 4,
+      pos.current.y,
+      pos.current.z + Math.cos(heading.current) * 4
     );
+    const aheadY = getGlobalSurfaceHeight(lookAhead.x, lookAhead.z);
+    lookAhead.y = aheadY + wheelRadius;
 
     if (carRef.current) {
-      carRef.current.position.copy(carPos);
-      
-      const lookTarget = new THREE.Vector3(
-        roadAhead.x + right.x * lateralX.current,
-        aheadSurfaceY + wheelRadius,
-        roadAhead.z + right.z * lateralX.current
-      );
-      carRef.current.lookAt(lookTarget);
+      carRef.current.position.copy(pos.current);
+      carRef.current.lookAt(lookAhead);
     }
 
     // ── Tree Collisions ──
@@ -414,8 +288,8 @@ function GameLogic({
     for (const cIdx of activeChunks) {
       const trees = getTrees(cIdx);
       for (const t of trees) {
-        const dx = carPos.x - t.x;
-        const dz = carPos.z - t.z;
+        const dx = pos.current.x - t.x;
+        const dz = pos.current.z - t.z;
         const distSq = dx*dx + dz*dz;
         if (distSq < 4.6) { // Collision radius ~2.1m
           collided = true;
@@ -432,16 +306,30 @@ function GameLogic({
     }
 
     // ── Camera Chase ──
-    const back = new THREE.Vector3(-tangent.x, 0, -tangent.z).multiplyScalar(camCfg.back);
-    const camTarget = carPos.clone().add(back).add(new THREE.Vector3(0, camCfg.up, 0));
+    const camBackX = -Math.sin(heading.current) * camCfg.back;
+    const camBackZ = -Math.cos(heading.current) * camCfg.back;
+    
+    const camTarget = pos.current.clone().add(new THREE.Vector3(camBackX, camCfg.up, camBackZ));
 
     if (cameraMode === "cinematic") {
-      camTarget.x += Math.sin(currentZ.current * 0.0025) * 5;
+      camTarget.x += Math.sin(pos.current.z * 0.0025) * 5;
     }
 
-    camera.position.lerp(camTarget, camCfg.lerp);
+    if (distRef.current < 1) {
+      camera.position.copy(camTarget);
+    } else {
+      const dampFactor = 1 - Math.exp(-(camCfg.lerp + Math.abs(spd) * 0.005) * 30 * dt);
+      camera.position.lerp(camTarget, dampFactor);
+      
+      if (cameraMode !== "cinematic") {
+        const maxDist = camCfg.back + 2.5;
+        if (camera.position.distanceTo(pos.current) > maxDist) {
+          const dir = camera.position.clone().sub(pos.current).normalize();
+          camera.position.copy(pos.current).add(dir.multiplyScalar(maxDist));
+        }
+      }
+    }
 
-    // Apply crash vibration offset to camera if active
     if (shakeTime.current > 0) {
       shakeTime.current -= dt;
       const amt = shakeTime.current * 1.6;
@@ -449,11 +337,13 @@ function GameLogic({
       camera.position.y += (Math.random() - 0.5) * amt;
     }
 
-    camera.lookAt(
-      roadAhead.x + right.x * lateralX.current,
-      aheadSurfaceY + 0.8,
-      roadAhead.z + right.z * lateralX.current
+    // Camera lookat target
+    const camLookTarget = new THREE.Vector3(
+      pos.current.x + Math.sin(heading.current) * -camCfg.lookFwd,
+      pos.current.y + 0.8,
+      pos.current.z + Math.cos(heading.current) * -camCfg.lookFwd
     );
+    camera.lookAt(camLookTarget);
 
     // ── Fog updates ──
     if (state.scene.fog instanceof THREE.Fog) {
@@ -469,7 +359,7 @@ function GameLogic({
     }
 
     // Chunk Streaming
-    const idx = Math.floor(-currentZ.current / CHUNK_LENGTH);
+    const idx = Math.floor(-pos.current.z / CHUNK_LENGTH);
     if (idx !== lastChunkIdx.current) {
       lastChunkIdx.current = idx;
       const next = [idx, idx + 1, idx + 2];
@@ -485,10 +375,43 @@ function GameLogic({
     }
   });
 
+  const activeBiome = pathConfig.autoBiome ? getActiveBiome(pos.current.z) : theme;
+
   return (
     <>
-      <fog attach="fog" args={[tc.fog, tc.fogN, tc.fogF]} />
-      <ambientLight intensity={tc.ambient} />
+      <fog attach="fog" args={[weather === "storm" ? "#4a5a6a" : tc.fog, tc.fogN, tc.fogF]} />
+      <ambientLight intensity={weather === "storm" ? tc.ambient * 0.4 : tc.ambient} />
+      
+      {/* Dynamic Sky */}
+      <Sky 
+        sunPosition={timeOfDay === "night" ? [0, -1, 0] : [tc.sky.az === 180 ? 0 : 50, tc.sky.el, tc.sky.az === 180 ? -100 : 50]} 
+        turbidity={tc.sky.turbidity} 
+        rayleigh={tc.sky.rayleigh} 
+        inclination={0.5} 
+        azimuth={0.25} 
+      />
+
+      {/* Sun/Moon Mesh & Flare for visual immersion */}
+      {timeOfDay !== "night" && (
+        <group position={[tc.sky.az === 180 ? 0 : 1500, tc.sky.el * 200, tc.sky.az === 180 ? -3000 : 1500]}>
+          <mesh>
+            <circleGeometry args={[200, 32]} />
+            <meshBasicMaterial color={tc.sun} fog={false} />
+          </mesh>
+          <SunFlare position={[0,0,0]} color={tc.sun} />
+        </group>
+      )}
+      {timeOfDay === "night" && (
+        <group position={[400, 800, -1500]}>
+          <mesh>
+            <circleGeometry args={[80, 32]} />
+            <meshBasicMaterial color="#e0e0e0" fog={false} />
+          </mesh>
+          <SunFlare position={[0,0,0]} color="rgba(220,230,255,0.4)" />
+          <pointLight color="#ffeecc" intensity={0.5} distance={3000} />
+        </group>
+      )}
+
       <directionalLight
         position={[40, 80, 30]}
         intensity={timeOfDay === "night" ? 0.04 : 1.3}
@@ -505,16 +428,35 @@ function GameLogic({
       {timeOfDay === "night" && (
         <pointLight color="#ffeecc" intensity={2.8} distance={20} position={[0, 2.2, -3]} />
       )}
+      {/* Hemisphere light for subtle ambient fill (especially night) */}
+      <hemisphereLight args={[
+        timeOfDay === "night" ? "#1a2540" : (weather === "storm" ? "#3a4a5a" : "#b1e1ff"), 
+        timeOfDay === "night" ? "#080810" : "#333340", 
+        timeOfDay === "night" ? 0.25 : (weather === "storm" ? 0.2 : 0.4)
+      ]} />
+
       {activeChunks.map(i => (
-        <RoadChunk key={i} startZ={-(i * CHUNK_LENGTH)} length={-CHUNK_LENGTH} timeOfDay={timeOfDay} theme={theme} />
+        <RoadChunk key={i} startZ={-(i * CHUNK_LENGTH)} length={-CHUNK_LENGTH} timeOfDay={timeOfDay} theme={activeBiome} weather={weather} />
       ))}
-      <Trees chunks={activeChunks} theme={theme} />
+
+      {/* Animated GLSL Ocean for Sea biome */}
+      {activeBiome === "sea" && activeChunks.map(i => (
+        <Ocean key={`ocean-${i}`} startZ={-(i * CHUNK_LENGTH)} length={-CHUNK_LENGTH} timeOfDay={timeOfDay} />
+      ))}
+
+      <Trees chunks={activeChunks} theme={activeBiome} />
+      <Rocks chunks={activeChunks} theme={activeBiome} />
+      <GrassClumps chunks={activeChunks} theme={activeBiome} />
+      <CloudLayer theme={activeBiome} timeOfDay={timeOfDay} />
+      
+      {/* Ambient Wildlife */}
+      <Birds count={25} radius={500} />
       
       {/* Dynamic dust particles for offroad driving */}
-      <WheelParticles carRef={carRef} speedRef={speedRef} isOffRoad={isOffRoad} theme={theme} />
+      <WheelParticles carRef={carRef} speedRef={speedRef} isOffRoad={isOffRoad} theme={activeBiome} />
       
-      {/* Weather particles (falling snow) */}
-      <WeatherParticles theme={theme} carRef={carRef} />
+      {/* Weather particles (falling snow, rain, thunder) */}
+      <WeatherParticles theme={activeBiome} weather={weather} carRef={carRef} />
     </>
   );
 }
@@ -523,13 +465,27 @@ function GameLogic({
 export default function GameScene() {
   const [timeOfDay, setTimeOfDay]   = useState<TimeOfDay>("day");
   const [cameraMode, setCameraMode] = useState<CameraMode>("chase");
-  const [theme, setTheme]           = useState<Theme>("hills");
+  const [theme, setThemeState]      = useState<Theme>("hills");
+  const [weather, setWeather]       = useState<WeatherType>("auto");
   const [carType, setCarType]       = useState<CarType>("sedan");
   const [carColor, setCarColor]     = useState("#c0392b");
   const [soundOn, setSoundOn]       = useState(false);
 
   const [hudSpeed, setHudSpeed]     = useState(0);
   const [hudDist, setHudDist]       = useState(0);
+
+  const setTheme = (t: Theme) => {
+    setThemeState(t);
+    pathConfig.theme = t;
+    pathConfig.autoBiome = false;
+    setAutoBiome(false);
+  };
+  const [autoBiome, setAutoBiome] = useState(false);
+  const toggleAutoBiome = () => {
+    const next = !autoBiome;
+    setAutoBiome(next);
+    pathConfig.autoBiome = next;
+  };
   const [uiVisible, setUiVisible]   = useState(true);
 
   const speedRef = useRef<number>(50);
@@ -616,7 +572,7 @@ export default function GameScene() {
   }, []);
 
   const handleHud = useCallback((s: number, d: number) => {
-    setHudSpeed(Math.round(Math.abs(s) * 2.2));
+    setHudSpeed(Math.round(Math.abs(s)));
     setHudDist(d);
   }, []);
 
@@ -679,6 +635,7 @@ export default function GameScene() {
           timeOfDay={timeOfDay}
           cameraMode={cameraMode}
           theme={theme}
+          weather={weather}
           carType={carType}
           carColor={carColor}
           soundOn={soundOn}
@@ -716,7 +673,7 @@ export default function GameScene() {
                 strokeWidth="6"
                 strokeLinecap="round"
                 strokeDasharray="250"
-                strokeDashoffset={250 - Math.min(250, (hudSpeed / 150) * 250)}
+                strokeDashoffset={250 - Math.min(250, (hudSpeed / 160) * 250)}
                 style={{ transition: "stroke-dashoffset 0.08s ease" }}
               />
               {/* RPM Arc Background */}
@@ -765,7 +722,8 @@ export default function GameScene() {
           <div style={S.badges}>
             <Bdg label={cameraMode.toUpperCase()} />
             <Bdg label={timeOfDay.toUpperCase()} />
-            <Bdg label={theme.toUpperCase()} />
+            <Bdg label={weather.toUpperCase()} />
+            <Bdg label={autoBiome ? "AUTO BIOME" : theme.toUpperCase()} />
           </div>
 
           {/* ── CUSTOMIZE MENU PANEL ── */}
@@ -773,8 +731,8 @@ export default function GameScene() {
             {/* Theme selector */}
             <div style={S.customGroup}>
               <span style={S.customGroupTitle}>THEME</span>
-              <div style={S.customRow}>
-                {(["hills", "desert", "snow"] as const).map(t => (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                {(["hills", "forest", "desert", "sanddunes", "snow", "sea"] as const).map(t => (
                   <button
                     key={t}
                     style={{
@@ -784,7 +742,38 @@ export default function GameScene() {
                     }}
                     onClick={() => setTheme(t)}
                   >
-                    {t.substring(0, 4).toUpperCase()}
+                    {t.substring(0, 5).toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <button
+                style={{
+                  ...S.customBtn,
+                  marginTop: 4,
+                  width: '100%',
+                  background: autoBiome ? "rgba(16,185,129,0.25)" : "transparent",
+                  color: autoBiome ? "#10b981" : "rgba(255,255,255,0.5)",
+                  borderColor: autoBiome ? "#10b981" : "rgba(255,255,255,0.12)",
+                  fontWeight: 700,
+                }}
+                onClick={toggleAutoBiome}
+              >
+                {autoBiome ? "✦ AUTO ON" : "AUTO"}
+              </button>
+            </div>
+
+            <div style={S.vDivider} />
+
+            <div style={S.section}>
+              <div style={S.sectionTitle}>WEATHER</div>
+              <div style={S.grid2}>
+                {(["auto", "clear", "rain", "snow", "thunder"] as WeatherType[]).map(w => (
+                  <button
+                    key={w}
+                    style={{ ...S.customBtn, ...(weather === w ? S.btnActive : {}) }}
+                    onClick={() => setWeather(w)}
+                  >
+                    {w.toUpperCase()}
                   </button>
                 ))}
               </div>
@@ -861,12 +850,6 @@ export default function GameScene() {
           </div>
         </div>
       )}
-
-      {/* Mobile speed buttons */}
-      <div style={S.touch}>
-        <Btn label="+" onPress={() => { speedRef.current = Math.min(speedRef.current + 12, 150); }} />
-        <Btn label="−" onPress={() => { speedRef.current = Math.max(speedRef.current - 12, -25); }} />
-      </div>
 
       <div style={S.brand}>slow roads</div>
     </div>
